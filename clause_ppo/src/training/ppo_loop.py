@@ -538,12 +538,36 @@ def train_ppo(config: dict, spider_dir: str, prm_ckpt: str) -> list[dict]:
     )
 
     # ── Batched PPO Training Loop ────────────────────────────────────────────
+    from datetime import datetime
+    import time
+    
     log_entries: list[dict] = []
     trained_episodes = 0
     num_episodes = tcfg['num_episodes']
     batch_size = pcfg['batch_size']
+    
+    # Record training run start time
+    run_start_time = datetime.now()
+    run_start_timestamp = run_start_time.isoformat()
+    training_start = time.time()
 
     print(f"\nStarting PPO training: {num_episodes} episodes (batch_size={batch_size})")
+    print(f"🕐 Training started at: {run_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # Log run start metadata
+    start_entry = {
+        'run_start': run_start_timestamp,
+        'config': {
+            'num_episodes': num_episodes,
+            'batch_size': batch_size,
+            'learning_rate': pcfg['learning_rate'],
+            'execution_scale': pcfg.get('execution_scale', 10.0),
+            'alpha': pcfg['alpha'],
+            'kl_coef': pcfg['kl_coef'],
+        }
+    }
+    with open(paths['log_file'], 'a') as f:
+        f.write(json.dumps(start_entry) + '\n')
 
     from tqdm import tqdm
     
@@ -755,8 +779,15 @@ def train_ppo(config: dict, spider_dir: str, prm_ckpt: str) -> list[dict]:
                 if ep_idx < 3:
                     print(f"  ⚠️ PPO trainer returned no stats (None)")
             
+            # Calculate elapsed time since training start
+            elapsed_time = time.time() - training_start
+            current_time = datetime.now().isoformat()
+            
             entry = {
                 'episode':       ep_idx + 1,
+                'timestamp':     current_time,
+                'elapsed_time':  round(elapsed_time, 1),  # seconds since training start
+                'run_start':     run_start_timestamp,
                 'terminal':      terminal,
                 'prm_score':     round(prm_score, 4),
                 'reward':        round(reward, 4),
@@ -837,6 +868,28 @@ def train_ppo(config: dict, spider_dir: str, prm_ckpt: str) -> list[dict]:
         trained_episodes += len(rollout_buffer)
         rollout_buffer.clear()
 
+    # Training completion summary
+    training_end = time.time()
+    total_duration = training_end - training_start
+    end_time = datetime.now()
+    
     print(f"\nPPO training complete. {trained_episodes} trained episodes ({num_episodes} iterations).")
     print(f"Batched updates: {trained_episodes // batch_size} full batches + {trained_episodes % batch_size} remaining")
+    print(f"🕐 Training duration: {total_duration:.1f}s ({total_duration/60:.1f} minutes)")
+    print(f"📊 Episodes per second: {num_episodes/total_duration:.2f}")
+    
+    # Log training completion
+    completion_entry = {
+        'run_complete': end_time.isoformat(),
+        'run_start': run_start_timestamp,
+        'total_duration': round(total_duration, 1),
+        'episodes_completed': num_episodes,
+        'episodes_trained': trained_episodes,
+        'batch_size': batch_size,
+        'full_batches': trained_episodes // batch_size,
+        'remaining_episodes': trained_episodes % batch_size,
+    }
+    with open(paths['log_file'], 'a') as f:
+        f.write(json.dumps(completion_entry) + '\n')
+    
     return log_entries
