@@ -1,0 +1,36 @@
+# Minimal PPO configuration for testing with deterministic prefix fix
+# Focuses on execution correctness with minimal reward complexity
+
+model:
+  actor_name: /home/henrylin0822/models/qwen  # Base model
+  sft_checkpoint: results/sft_checkpoints/final  # SFT LoRA adapter
+  prm_checkpoint: results/prm_checkpoints/epoch_2  # enhanced PRM trained on sophisticated dataset
+  lora_rank: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  target_modules: [q_proj, v_proj]
+  quantization: 4bit           # '4bit' | 'none'
+
+ppo:
+  alpha: 0.0                   # DISABLED: PRM has multiple issues (random head, no sigmoid, tokenizer mismatch)
+  execution_scale: 3.0         # REDUCED execution reward scale for stability
+  reward_shaping: original     # SIMPLIFIED reward strategy (just execution + small PRM)
+  kl_coef: 0.1                 # initial KL penalty coefficient
+  learning_rate: 3.0e-6        # REDUCED learning rate for stability
+  batch_size: 1                # PPO episode batch (VRAM constrained)
+  mini_batch_size: 1
+  gradient_accumulation_steps: 1
+  ppo_epochs: 4                # inner PPO update epochs per batch
+  max_new_tokens: 128          # max tokens for rewritten SQL generation
+  temperature: 0.3             # LOWER temperature for more deterministic generation
+
+training:
+  num_episodes: 200            # REDUCED episodes for testing
+  ppo_split_start: 4000        # start index in train_spider.json (non-overlapping with SFT)
+  max_grad_norm: 0.5           # REDUCED gradient norm for stability
+  eval_every: 50               # more frequent checkpoints for testing
+  log_every: 5                 # more frequent logging for monitoring
+
+paths:
+  output_dir: results/ppo_minimal_checkpoints
+  log_file: results/ppo_minimal_training_log.jsonl
