@@ -375,9 +375,9 @@ def train_ppo(config: dict, spider_dir: str, prm_ckpt: str) -> list[dict]:
         target_modules=mcfg.get('target_modules', ['q_proj', 'v_proj']),
         bias='none',
     )
-    # Create merged SFT model first (SFT adapter merged into base weights)
-    # This ensures both actor and reference start from the actual SFT model, not base
-    merged_sft_model = None
+    # Create merged SFT model and save to disk for independent loading
+    # This prevents actor and reference from sharing adapter weights
+    merged_sft_path = None
     if mcfg.get('sft_checkpoint'):
         print(f"Creating merged SFT model from {mcfg['sft_checkpoint']}...")
         # Resolve relative paths relative to the clause_ppo directory
@@ -397,17 +397,27 @@ def train_ppo(config: dict, spider_dir: str, prm_ckpt: str) -> list[dict]:
             )
             # Merge and unload to get base model + SFT weights combined
             merged_sft_model = sft_model.merge_and_unload()
-            print("✅ SFT adapter merged into base weights successfully")
+            
+            # Save merged model to disk for independent loading
+            merged_sft_path = os.path.join(paths['output_dir'], 'merged_sft_temp')
+            os.makedirs(merged_sft_path, exist_ok=True)
+            merged_sft_model.save_pretrained(merged_sft_path)
+            print(f"✅ SFT adapter merged and saved to {merged_sft_path}")
+            
+            # Clear memory
+            del sft_model, merged_sft_model
+            torch.cuda.empty_cache() if torch.cuda.is_available() else None
+            
         except Exception as e:
             print(f"❌ Failed to load/merge SFT checkpoint: {e}")
             print("Falling back to base model")
-            merged_sft_model = None
+            merged_sft_path = None
     
-    # Initialize actor from merged SFT model (or base if SFT merge failed)
-    if merged_sft_model is not None:
+    # Initialize actor from saved merged SFT model (independent loading)
+    if merged_sft_path is not None:
         print("🎯 Initializing PPO actor from merged SFT model...")
         actor = AutoModelForCausalLMWithValueHead.from_pretrained(
-            merged_sft_model,  # Use merged model instead of base
+            merged_sft_path,  # Load from saved merged model
             quantization_config=bnb_config,
             device_map='auto', 
             torch_dtype=torch.bfloat16,
@@ -428,12 +438,11 @@ def train_ppo(config: dict, spider_dir: str, prm_ckpt: str) -> list[dict]:
         from transformers import GenerationConfig
         actor.generation_config = GenerationConfig.from_pretrained(mcfg['actor_name'])
 
-    # Reference model: Use merged SFT model as frozen reference
-    # This ensures KL divergence is measured from SFT policy, not base model
-    if merged_sft_model is not None:
-        print("🎯 Creating reference model from merged SFT model...")
+    # Reference model: Load independently from saved merged SFT model (no shared adapters)
+    if merged_sft_path is not None:
+        print("🎯 Creating independent reference model from merged SFT model...")
         ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(
-            merged_sft_model,  # Same merged model as actor
+            merged_sft_path,  # Independent load from disk
             device_map='auto',
             torch_dtype=torch.bfloat16,
             quantization_config=bnb_config,
@@ -441,7 +450,7 @@ def train_ppo(config: dict, spider_dir: str, prm_ckpt: str) -> list[dict]:
         ref_model.eval()
         for param in ref_model.parameters():
             param.requires_grad = False
-        print("✅ Reference model initialized from SFT")
+        print("✅ Reference model initialized independently from SFT")
     else:
         print("⚠️  No merged SFT model, using base model as reference")
         ref_model = create_reference_model(actor)
@@ -528,14 +537,19 @@ def train_ppo(config: dict, spider_dir: str, prm_ckpt: str) -> list[dict]:
         dataset=dummy_dataset,
     )
 
-    # ── Episode loop ──────────────────────────────────────────────────────────
+    # ── Batched PPO Training Loop ────────────────────────────────────────────
     log_entries: list[dict] = []
     trained_episodes = 0
     num_episodes = tcfg['num_episodes']
+    batch_size = pcfg['batch_size']
 
-    print(f"\nStarting PPO training: {num_episodes} episodes")
+    print(f"\nStarting PPO training: {num_episodes} episodes (batch_size={batch_size})")
 
     from tqdm import tqdm
+    
+    # Collect rollouts in batches for proper advantage estimation
+    rollout_buffer = []
+    
     for ep_idx in tqdm(range(num_episodes), desc="PPO Training", ncols=100):
         sample = ppo_samples[ep_idx % len(ppo_samples)]
 
@@ -651,15 +665,41 @@ def train_ppo(config: dict, spider_dir: str, prm_ckpt: str) -> list[dict]:
         reward_shaping = pcfg.get('reward_shaping', 'balanced')
         reward = compute_reward(terminal, prm_score, pcfg['alpha'], pcfg.get('execution_scale', 10.0), reward_shaping, sql_quality)
 
-        # Step 8: PPO update
-        stats = ppo_trainer.step(
-            [query_tensor],
-            [generated_ids],
-            [torch.tensor(reward, dtype=torch.float32)],
-        )
-
-        trained_episodes += 1
-
+        # Step 8: Collect rollout for batched PPO update
+        rollout_buffer.append({
+            'query_tensor': query_tensor,
+            'generated_ids': generated_ids, 
+            'reward': reward,
+            'episode_data': {
+                'episode': ep_idx + 1,
+                'terminal': terminal,
+                'prm_score': prm_score,
+                'reward': reward,
+                'faulty_clause': faulty_clause,
+                'sql_quality': sql_quality,
+                'sample': sample,
+            }
+        })
+        
+        # Step 9: PPO update when batch is full
+        stats = None
+        if len(rollout_buffer) >= batch_size:
+            # Extract batched data
+            query_tensors = [rollout['query_tensor'] for rollout in rollout_buffer]
+            generated_ids_list = [rollout['generated_ids'] for rollout in rollout_buffer]
+            rewards = [torch.tensor(rollout['reward'], dtype=torch.float32) for rollout in rollout_buffer]
+            
+            print(f"  🔄 PPO batch update: {len(rollout_buffer)} episodes")
+            
+            # Batched PPO step for proper advantage estimation
+            stats = ppo_trainer.step(query_tensors, generated_ids_list, rewards)
+            
+            # Track all episodes in this batch as trained
+            trained_episodes += len(rollout_buffer)
+            
+            # Clear buffer for next batch
+            rollout_buffer.clear()
+        
         # ── Logging ───────────────────────────────────────────────────────────
         if (ep_idx + 1) % tcfg['log_every'] == 0:
             # Calculate running average for trend analysis
@@ -689,12 +729,12 @@ def train_ppo(config: dict, spider_dir: str, prm_ckpt: str) -> list[dict]:
                     print(f"  🔍 PPO stats sample: {dict(list(stats.items())[:3])}")
                 
                 try:
-                    # Try multiple possible key names
+                    # Try measured KL first (NOT the coefficient)
                     kl_divergence = (stats.get('objective/kl') or 
                                    stats.get('ppo/loss/kl') or 
                                    stats.get('policy/kl') or
-                                   stats.get('kl') or
-                                   stats.get('objective/kl_coef'))
+                                   stats.get('kl'))
+                    # DO NOT fallback to kl_coef - that's the coefficient, not measured KL
                     
                     policy_entropy = (stats.get('ppo/policy/entropy') or 
                                     stats.get('policy/entropy') or
@@ -703,6 +743,12 @@ def train_ppo(config: dict, spider_dir: str, prm_ckpt: str) -> list[dict]:
                     value_loss = (stats.get('ppo/loss/value') or 
                                 stats.get('value_loss') or
                                 stats.get('losses/value_loss'))
+                    
+                    # Debug measured vs coefficient values  
+                    if ep_idx < 3:
+                        measured_kl = stats.get('objective/kl', 'not_found')
+                        kl_coef = stats.get('objective/kl_coef', 'not_found') 
+                        print(f"  📊 KL debug: measured={measured_kl}, coef={kl_coef}")
                 except Exception as e:
                     print(f"  ⚠️ Failed to extract PPO stats: {e}")
             else:
@@ -717,9 +763,9 @@ def train_ppo(config: dict, spider_dir: str, prm_ckpt: str) -> list[dict]:
                 'faulty_clause': faulty_clause,
                 'reward_trend':  round(reward_trend, 4),
                 'success_rate':  round(success_rate, 3),  # Track success rate
-                'kl_divergence': round(kl_divergence, 4) if kl_divergence else None,  # Track KL
-                'policy_entropy': round(policy_entropy, 4) if policy_entropy else None,  # Track entropy
-                'value_loss': round(value_loss, 4) if value_loss else None,  # Track value function
+                'kl_divergence': round(kl_divergence, 4) if kl_divergence is not None else None,  # Track KL
+                'policy_entropy': round(policy_entropy, 4) if policy_entropy is not None else None,  # Track entropy  
+                'value_loss': round(value_loss, 4) if value_loss is not None else None,  # Track value function
                 'sql_quality':   sql_quality,  # Include SQL quality metrics in log
             }
             log_entries.append(entry)
@@ -780,5 +826,17 @@ def train_ppo(config: dict, spider_dir: str, prm_ckpt: str) -> list[dict]:
             tokenizer.save_pretrained(ckpt_path)
             print(f"✅ Checkpoint saved → {ckpt_path}")
 
+    # Final batch update for remaining episodes
+    if len(rollout_buffer) > 0:
+        print(f"  🔄 Final PPO batch update: {len(rollout_buffer)} remaining episodes")
+        query_tensors = [rollout['query_tensor'] for rollout in rollout_buffer]
+        generated_ids_list = [rollout['generated_ids'] for rollout in rollout_buffer]  
+        rewards = [torch.tensor(rollout['reward'], dtype=torch.float32) for rollout in rollout_buffer]
+        
+        ppo_trainer.step(query_tensors, generated_ids_list, rewards)
+        trained_episodes += len(rollout_buffer)
+        rollout_buffer.clear()
+
     print(f"\nPPO training complete. {trained_episodes} trained episodes ({num_episodes} iterations).")
+    print(f"Batched updates: {trained_episodes // batch_size} full batches + {trained_episodes % batch_size} remaining")
     return log_entries

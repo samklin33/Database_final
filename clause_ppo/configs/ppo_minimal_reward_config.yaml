@@ -17,8 +17,8 @@ ppo:
   reward_shaping: original     # SIMPLIFIED reward strategy (just execution + small PRM)
   kl_coef: 0.1                 # initial KL penalty coefficient
   learning_rate: 3.0e-6        # REDUCED learning rate for stability
-  batch_size: 1                # PPO episode batch (VRAM constrained)
-  mini_batch_size: 1
+  batch_size: 8                # PPO episode batch for proper advantage estimation  
+  mini_batch_size: 8
   gradient_accumulation_steps: 1
   ppo_epochs: 4                # inner PPO update epochs per batch
   max_new_tokens: 128          # max tokens for rewritten SQL generation
