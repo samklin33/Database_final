@@ -584,10 +584,14 @@ def train_ppo(config: dict, spider_dir: str, prm_ckpt: str) -> list[dict]:
                 raise e
         # Decode only the newly generated tokens (response_tensors includes the query)
         generated_ids = response_tensors[0][len(query_tensor):]
-        rewritten_sql = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+        raw_generation = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+        
+        # Log raw generations at episode 0 and 200 for expert analysis
+        if ep_idx in [0, 199] or ep_idx < 10:  # Episodes 0-9, and 200
+            print(f"  📋 RAW generation (ep {ep_idx}): '{raw_generation}'")
         
         # ROBUST SQL EXTRACTION: Handle all wrapper formats seen in training
-        rewritten_sql = _extract_sql_robust(rewritten_sql)
+        rewritten_sql = _extract_sql_robust(raw_generation)
         
         
         # Log generated SQL for debugging (first 20 episodes and every 50th episode)
@@ -647,7 +651,7 @@ def train_ppo(config: dict, spider_dir: str, prm_ckpt: str) -> list[dict]:
         reward = compute_reward(terminal, prm_score, pcfg['alpha'], pcfg.get('execution_scale', 10.0), reward_shaping, sql_quality)
 
         # Step 8: PPO update
-        ppo_trainer.step(
+        stats = ppo_trainer.step(
             [query_tensor],
             [generated_ids],
             [torch.tensor(reward, dtype=torch.float32)],
@@ -671,13 +675,20 @@ def train_ppo(config: dict, spider_dir: str, prm_ckpt: str) -> list[dict]:
                 reward_trend = reward
                 success_rate = 1.0 if terminal > 0 else 0.0
                 
-            # Extract KL divergence from PPO trainer stats if available
+            # Extract PPO metrics from trainer stats
             kl_divergence = None
-            try:
-                if hasattr(ppo_trainer, 'log_stats') and 'policy/kl' in str(ppo_trainer.log_stats):
-                    kl_divergence = float(ppo_trainer.log_stats.get('policy/kl', 0.0))
-            except:
-                pass
+            policy_entropy = None
+            value_loss = None
+            
+            # Get stats from latest PPO step
+            if stats:
+                try:
+                    kl_divergence = stats.get('objective/kl', stats.get('ppo/loss/kl', None))
+                    policy_entropy = stats.get('ppo/policy/entropy', None)
+                    value_loss = stats.get('ppo/loss/value', None)
+                except Exception as e:
+                    print(f"  ⚠️ Failed to extract PPO stats: {e}")
+                    print(f"  Available stats keys: {list(stats.keys()) if stats else 'None'}")
             
             entry = {
                 'episode':       ep_idx + 1,
@@ -688,6 +699,8 @@ def train_ppo(config: dict, spider_dir: str, prm_ckpt: str) -> list[dict]:
                 'reward_trend':  round(reward_trend, 4),
                 'success_rate':  round(success_rate, 3),  # Track success rate
                 'kl_divergence': round(kl_divergence, 4) if kl_divergence else None,  # Track KL
+                'policy_entropy': round(policy_entropy, 4) if policy_entropy else None,  # Track entropy
+                'value_loss': round(value_loss, 4) if value_loss else None,  # Track value function
                 'sql_quality':   sql_quality,  # Include SQL quality metrics in log
             }
             log_entries.append(entry)
