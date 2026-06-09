@@ -514,6 +514,7 @@ def train_ppo(config: dict, spider_dir: str, prm_ckpt: str) -> list[dict]:
         ppo_epochs=pcfg['ppo_epochs'],
         init_kl_coef=pcfg['kl_coef'],
         max_grad_norm=tcfg['max_grad_norm'],
+        log_with=None,  # Enable stats logging
     )
     # Create dummy dataset for PPOTrainer initialization
     from datasets import Dataset
@@ -682,13 +683,31 @@ def train_ppo(config: dict, spider_dir: str, prm_ckpt: str) -> list[dict]:
             
             # Get stats from latest PPO step
             if stats:
+                # Debug: Print available stats on first few episodes
+                if ep_idx < 3:
+                    print(f"  🔍 PPO stats keys: {list(stats.keys())}")
+                    print(f"  🔍 PPO stats sample: {dict(list(stats.items())[:3])}")
+                
                 try:
-                    kl_divergence = stats.get('objective/kl', stats.get('ppo/loss/kl', None))
-                    policy_entropy = stats.get('ppo/policy/entropy', None)
-                    value_loss = stats.get('ppo/loss/value', None)
+                    # Try multiple possible key names
+                    kl_divergence = (stats.get('objective/kl') or 
+                                   stats.get('ppo/loss/kl') or 
+                                   stats.get('policy/kl') or
+                                   stats.get('kl') or
+                                   stats.get('objective/kl_coef'))
+                    
+                    policy_entropy = (stats.get('ppo/policy/entropy') or 
+                                    stats.get('policy/entropy') or
+                                    stats.get('entropy'))
+                    
+                    value_loss = (stats.get('ppo/loss/value') or 
+                                stats.get('value_loss') or
+                                stats.get('losses/value_loss'))
                 except Exception as e:
                     print(f"  ⚠️ Failed to extract PPO stats: {e}")
-                    print(f"  Available stats keys: {list(stats.keys()) if stats else 'None'}")
+            else:
+                if ep_idx < 3:
+                    print(f"  ⚠️ PPO trainer returned no stats (None)")
             
             entry = {
                 'episode':       ep_idx + 1,
