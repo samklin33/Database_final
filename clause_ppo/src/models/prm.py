@@ -61,13 +61,13 @@ class ClausePRM(nn.Module):
                 model_name,
                 quantization_config=bnb_config,
                 device_map='auto',
-                dtype=torch.bfloat16,
+                torch_dtype=torch.bfloat16,
             )
         else:
             self.backbone = AutoModelForCausalLM.from_pretrained(
                 model_name,
                 device_map='auto',
-                dtype=torch.bfloat16,
+                torch_dtype=torch.bfloat16,
             )
         print("  Backbone loaded.", flush=True)
 
@@ -90,7 +90,8 @@ class ClausePRM(nn.Module):
         # ── Scalar regression head ────────────────────────────────────────
         hidden_size = self.backbone.config.hidden_size
         backbone_device = next(self.backbone.parameters()).device
-        self.score_head = nn.Linear(hidden_size, 1).to(backbone_device)
+        backbone_dtype = next(self.backbone.parameters()).dtype
+        self.score_head = nn.Linear(hidden_size, 1).to(device=backbone_device, dtype=backbone_dtype)
         print(f"  Score head: Linear({hidden_size} → 1) (device={backbone_device})", flush=True)
 
     def forward(

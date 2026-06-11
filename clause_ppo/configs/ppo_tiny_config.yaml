@@ -1,0 +1,32 @@
+# Ultra-minimal PPO config using a tiny model for testing
+model:
+  actor_name: distilgpt2                    # Tiny 82M parameter model
+  prm_checkpoint: results/prm_checkpoints/best_checkpoint
+  lora_rank: 2
+  lora_alpha: 4
+  lora_dropout: 0.05
+  target_modules: [c_attn]                  # GPT-2 attention layer name
+  quantization: none
+  skip_prm: true                            # Skip PRM entirely
+
+ppo:
+  alpha: 0.0                                # No PRM, only KL
+  kl_coef: 0.1
+  learning_rate: 1.0e-5
+  batch_size: 1
+  mini_batch_size: 1
+  gradient_accumulation_steps: 1
+  ppo_epochs: 1
+  max_new_tokens: 4                         # Minimal generation
+  temperature: 0.7
+
+training:
+  num_episodes: 1
+  ppo_split_start: 4000
+  max_grad_norm: 1.0
+  eval_every: 1
+  log_every: 1
+
+paths:
+  output_dir: results/ppo_tiny_checkpoints
+  log_file: results/ppo_tiny_log.jsonl

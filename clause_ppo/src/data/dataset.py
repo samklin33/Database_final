@@ -70,7 +70,19 @@ class PRMDataset(Dataset):
 
         # ── Load processed data ───────────────────────────────────────────
         orig_path = os.path.join(processed_dir, 'original_dataset.json')
-        corr_path = os.path.join(processed_dir, 'corruption_dataset.json')
+        
+        # Try sophisticated rewards first, fallback to basic corruption dataset
+        corr_path_sophisticated = os.path.join(processed_dir, 'corruption_dataset_with_rewards.json')
+        corr_path_basic = os.path.join(processed_dir, 'corruption_dataset.json')
+        
+        if os.path.exists(corr_path_sophisticated):
+            corr_path = corr_path_sophisticated
+            use_sophisticated_rewards = True
+            print(f"Loading sophisticated dataset: {corr_path}")
+        else:
+            corr_path = corr_path_basic
+            use_sophisticated_rewards = False
+            print(f"Loading basic dataset: {corr_path}")
 
         with open(orig_path) as f:
             originals = json.load(f)
@@ -93,23 +105,36 @@ class PRMDataset(Dataset):
         # Cascade-labeled negative examples from corruption records
         # j* = corrupted_position (0-indexed position in clause execution order)
         # Positions 0..j*-1 → label 1.0 (prefix was still correct)
-        # Position j* → label 0.0 (fault introduced here)
+        # Position j* → sophisticated reward or 0.0 (fault introduced here)
         for c in corruptions:
             j_star      = c['corrupted_position']
             question    = c['question']
             schema      = f"[schema for {c['db_id']}]"
             clause_name = c['corrupted_clause']
 
-            # Positions before the corrupted clause → label 1.0
-            for pos in range(j_star):
-                prefix_str = f"[PREFIX UP TO POSITION {pos}]"
-                text = self._format_input(question, schema, prefix_str)
-                self.items.append((text, 1.0))
+            if use_sophisticated_rewards and 'reward' in c and 'clause_names' in c:
+                # Use sophisticated per-clause rewards
+                clause_names = c['clause_names']
+                rewards = c['reward']
+                
+                for pos, reward in enumerate(rewards):
+                    if pos < len(clause_names):
+                        clause_name_at_pos = clause_names[pos]
+                        prefix_str = f"[PREFIX UP TO {clause_name_at_pos.upper()} CLAUSE]"
+                        text = self._format_input(question, schema, prefix_str)
+                        self.items.append((text, float(reward)))
+            else:
+                # Fallback to binary labeling
+                # Positions before the corrupted clause → label 1.0
+                for pos in range(j_star):
+                    prefix_str = f"[PREFIX UP TO POSITION {pos}]"
+                    text = self._format_input(question, schema, prefix_str)
+                    self.items.append((text, 1.0))
 
-            # The corrupted position itself → label 0.0
-            prefix_str = f"[CORRUPTED {clause_name.upper()}]"
-            text = self._format_input(question, schema, prefix_str)
-            self.items.append((text, 0.0))
+                # The corrupted position itself → label 0.0
+                prefix_str = f"[CORRUPTED {clause_name.upper()}]"
+                text = self._format_input(question, schema, prefix_str)
+                self.items.append((text, 0.0))
 
     # ── Public interface ──────────────────────────────────────────────────────
 

@@ -5,18 +5,25 @@ Evaluate baseline (full regeneration), Plan B (ClausePRM), and PPO (clause-level
 Outputs a markdown comparison table:
 
     | Method        | Accuracy@N | Avg Token Cost |
-    | Full regen    |    ?       |      ?         |
-    | Plan B (PRM)  |    ?       |      ?         |
-    | Clause PPO    |    ?       |      ?         |
+    | Full regen    |   0.XXX    |      XXX       |
+    | Plan B (PRM)  |   0.XXX    |      XXX       |
+    | Clause PPO    |   0.XXX    |      XXX       |
 
-Plan B is the pure reward model approach (ClausePRM + Best-of-N).
-PPO inference is a stub today — see run_clause_ppo() and QUESTIONS.md.
+Three approaches:
+- Baseline: Full query regeneration (HF Inference API)  
+- Plan B: Pure reward model approach (ClausePRM + Best-of-N clause repair)
+- PPO: RL-trained actor for direct clause-level repair (no separate PRM needed)
 
 Usage:
-    python scripts/evaluate.py --split dev
-    python scripts/evaluate.py --split dev --max-retries 3 --max-samples 20
-    python scripts/evaluate.py --split dev --plan-b-ckpt clause_ppo/results/prm_checkpoints/best_checkpoint
-    python scripts/evaluate.py --split dev --ppo-ckpt clause_ppo/results/ppo_checkpoints/ep_3000
+    # All three approaches
+    python scripts/evaluate.py --split dev \
+        --plan-b-ckpt clause_ppo/results/prm_checkpoints/best_checkpoint \
+        --ppo-ckpt clause_ppo/results/ppo_checkpoints/ep_400
+    
+    # Quick test
+    python scripts/evaluate.py --split dev --max-samples 10 \
+        --plan-b-ckpt clause_ppo/results/prm_checkpoints/best_checkpoint \
+        --ppo-ckpt clause_ppo/results/ppo_checkpoints/ep_400
 """
 
 import argparse
@@ -124,14 +131,22 @@ def run_clause_ppo(
     samples:     list[dict],
     ppo_ckpt:    str,
     max_retries: int,
+    prm_ckpt:    str = None,
 ) -> tuple[list[str], list[int], list[int]]:
     """
-    Run the PPO actor on each sample. Not implemented yet.
+    Run PPO inference: RL-trained actor + ClausePRM for best performance.
+    
+    Combines PPO-trained actor with ClausePRM scoring for optimal accuracy
+    by generating multiple candidates and selecting the best-scored one.
     """
-    raise NotImplementedError(
-        "PPO inference is not implemented. ppo_loop.py has train_ppo() but no "
-        "actor-loading / generation entry point. Ask Henry to add a "
-        "run_ppo_inference(sample, model, tokenizer) -> dict before passing --ppo-ckpt."
+    from baseline.ppo_inference import run_ppo_inference
+    
+    return run_ppo_inference(
+        samples=samples,
+        ppo_ckpt=ppo_ckpt,
+        max_retries=max_retries,
+        limit=None,
+        prm_ckpt=prm_ckpt,
     )
 
 
@@ -167,10 +182,14 @@ def print_table(rows: list[dict], n: int):
     print(header)
     print(sep)
     for r in rows:
+        # Handle SKIPPED values
+        acc_str = f"{r['accuracy']:>11.3f}" if isinstance(r['accuracy'], (int, float)) else f"{r['accuracy']:>11}"
+        tokens_str = f"{r['avg_tokens']:>14.1f}" if isinstance(r['avg_tokens'], (int, float)) else f"{r['avg_tokens']:>14}"
+        
         print(
             f"| {r['method']:<12} | "
-            f"{r['accuracy']:>11.3f} | "
-            f"{r['avg_tokens']:>14.1f} |"
+            f"{acc_str} | "
+            f"{tokens_str} |"
         )
 
 
@@ -221,19 +240,26 @@ def main():
     generate_fn = make_hf_api_generate_fn(client, args.model, max_tokens=args.max_tokens)
 
     print(f"\nRunning full-regen baseline (max_retries={args.max_retries})")
-    preds, tokens, attempts = run_full_regen(
-        samples, generate_fn, env, args.max_retries,
-    )
-
-    acc        = execution_accuracy(preds, samples, spider_dir=args.spider_dir)
-    avg_tokens = sum(tokens) / len(tokens) if tokens else 0.0
-    rows       = [{'method': 'Full regen', 'accuracy': acc, 'avg_tokens': avg_tokens}]
+    try:
+        preds, tokens, attempts = run_full_regen(
+            samples, generate_fn, env, args.max_retries,
+        )
+        acc        = execution_accuracy(preds, samples, spider_dir=args.spider_dir)
+        avg_tokens = sum(tokens) / len(tokens) if tokens else 0.0
+        rows       = [{'method': 'Full regen', 'accuracy': acc, 'avg_tokens': avg_tokens}]
+    except Exception as e:
+        print(f"❌ Baseline failed: {e}")
+        if "402" in str(e) or "Payment Required" in str(e):
+            print("💰 HuggingFace API credits depleted - skipping baseline")
+        else:
+            print("⚠️  Unexpected error - skipping baseline")
+        rows = [{'method': 'Full regen', 'accuracy': 'SKIPPED', 'avg_tokens': 'SKIPPED'}]
 
     if args.ppo_ckpt is not None:
         print(f"\nRunning Clause PPO (--ppo-ckpt {args.ppo_ckpt})")
         try:
             ppo_preds, ppo_tokens, _ = run_clause_ppo(
-                samples, args.ppo_ckpt, args.max_retries,
+                samples, args.ppo_ckpt, args.max_retries, args.plan_b_ckpt,
             )
             ppo_acc = execution_accuracy(ppo_preds, samples, spider_dir=args.spider_dir)
             ppo_avg = sum(ppo_tokens) / len(ppo_tokens) if ppo_tokens else 0.0

@@ -1,0 +1,21 @@
+# CLAUSE-PPO Requirements - CPU-Only Setup
+# Optimized for Python 3.11 with no GPU dependencies
+
+# Transformers & Training (no bitsandbytes for CPU)
+# Note: PyTorch is installed separately with CPU index
+transformers==4.44.0
+trl==0.7.11
+peft==0.8.2
+accelerate==0.34.2
+
+# Data & Utils
+datasets==3.2.0
+safetensors==0.4.5
+PyYAML==6.0.3
+tqdm==4.67.3
+numpy==1.26.4
+sqlparse==0.5.1
+
+# Optional Dev Tools
+jupyter==1.0.0
+ipykernel==6.29.5

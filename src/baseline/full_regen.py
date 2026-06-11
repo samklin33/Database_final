@@ -45,8 +45,8 @@ def build_baseline_prompt(question: str, schema: str) -> str:
     return (
         f"[QUESTION] {question} "
         f"[SCHEMA] {schema} "
-        f"[TASK] Generate the full SQL query. "
-        f"[SQL]"
+        f"[TASK] Generate the full SQL query. Generate ONLY the SQL query, no explanations or markdown. "
+        f"[SQL] "
     )
 
 

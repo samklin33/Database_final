@@ -7,7 +7,7 @@ model:
   lora_alpha: 32
   lora_dropout: 0.05
   target_modules: [q_proj, v_proj]
-  quantization: 4bit           # '4bit' | 'none'
+  quantization: none           # '4bit' | 'none' - disabled 4bit due to bitsandbytes issues
 
 training:
   max_length: 512

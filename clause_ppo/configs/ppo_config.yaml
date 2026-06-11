@@ -2,8 +2,9 @@
 # Target hardware: NVIDIA RTX 4090 (24 GB VRAM)
 
 model:
-  actor_name: codellama/CodeLlama-7b-hf
-  prm_checkpoint: results/prm_checkpoints/best_checkpoint
+  actor_name: /home/henrylin0822/models/qwen  # Base model
+  sft_checkpoint: results/sft_checkpoints/final  # SFT LoRA adapter
+  prm_checkpoint: results/prm_checkpoints/epoch_2  # enhanced PRM trained on sophisticated dataset
   lora_rank: 16
   lora_alpha: 32
   lora_dropout: 0.05
@@ -12,21 +13,23 @@ model:
 
 ppo:
   alpha: 0.5                   # weight on PRM score in combined reward
+  execution_scale: 10.0        # scale factor for execution reward (stronger signal)
+  reward_shaping: balanced     # reward strategy: "original", "balanced", "progressive", "syntax_aware"
   kl_coef: 0.1                 # initial KL penalty coefficient
-  learning_rate: 1.0e-5
+  learning_rate: 5.0e-6        # reduced learning rate for stability
   batch_size: 1                # PPO episode batch (VRAM constrained)
   mini_batch_size: 1
   gradient_accumulation_steps: 1  # trl PPO: batch_size must be divisible by (mini_batch_size * this); with batch_size=1, must be 1
   ppo_epochs: 4                # inner PPO update epochs per batch
   max_new_tokens: 128          # max tokens for rewritten SQL generation
-  temperature: 0.7
+  temperature: 0.5             # lower temperature for stability
 
 training:
-  num_episodes: 3000           # one pass through PPO split
-  ppo_split_start: 4000        # start index in train_spider.json
+  num_episodes: 550           # full training run  
+  ppo_split_start: 4000        # start index in train_spider.json (non-overlapping with SFT)
   max_grad_norm: 1.0
-  eval_every: 200              # episodes between checkpoints
-  log_every: 20                # episodes between log entries
+  eval_every: 100              # episodes between checkpoints
+  log_every: 10                # log every 10 episodes
 
 paths:
   output_dir: results/ppo_checkpoints

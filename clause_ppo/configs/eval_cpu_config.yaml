@@ -1,0 +1,20 @@
+# CPU-friendly Best-of-N clause repair evaluation config
+# No quantization, no device mapping
+
+model:
+  base_name: codellama/CodeLlama-7b-hf
+  lora_rank: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  target_modules: [q_proj, v_proj]
+  quantization: none           # 'none' for CPU
+
+eval:
+  n_candidates: 2              # reduced for CPU testing
+  temperature: 0.8             
+  max_new_tokens: 64           # reduced for faster testing
+  max_prompt_length: 512       # reduced for CPU
+  max_prm_length: 256          # reduced for CPU
+
+paths:
+  output_file: results/eval_best_of_n_cpu.jsonl

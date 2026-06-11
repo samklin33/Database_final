@@ -1,0 +1,33 @@
+# Test PPO training configuration with smaller model
+# For debugging purposes
+
+model:
+  actor_name: /home/henrylin0822/models/qwen  # Use same model as PRM
+  prm_checkpoint: results/prm_checkpoints/best_checkpoint
+  lora_rank: 8                # Reduce LoRA rank to save memory
+  lora_alpha: 16              # Reduce accordingly
+  lora_dropout: 0.05
+  target_modules: [q_proj, v_proj]
+  quantization: 4bit          # Enable 4-bit quantization for GPU
+
+ppo:
+  alpha: 0.5
+  kl_coef: 0.1
+  learning_rate: 1.0e-5
+  batch_size: 1
+  mini_batch_size: 1
+  gradient_accumulation_steps: 1
+  ppo_epochs: 1                # Reduce for testing
+  max_new_tokens: 16           # Further reduce for memory
+  temperature: 0.7
+
+training:
+  num_episodes: 5              # Just a few episodes for testing
+  ppo_split_start: 4000
+  max_grad_norm: 1.0
+  eval_every: 2
+  log_every: 1
+
+paths:
+  output_dir: results/ppo_test_checkpoints
+  log_file: results/ppo_test_log.jsonl

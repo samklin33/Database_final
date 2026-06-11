@@ -1,0 +1,32 @@
+# PPO config with shared model strategy to save memory
+model:
+  actor_name: /home/henrylin0822/models/qwen
+  prm_checkpoint: results/prm_checkpoints/best_checkpoint
+  lora_rank: 4
+  lora_alpha: 8
+  lora_dropout: 0.05
+  target_modules: [q_proj]
+  quantization: none
+  shared_backbone: true      # Share backbone between actor and PRM
+
+ppo:
+  alpha: 0.5
+  kl_coef: 0.1
+  learning_rate: 1.0e-5
+  batch_size: 1
+  mini_batch_size: 1
+  gradient_accumulation_steps: 1
+  ppo_epochs: 1
+  max_new_tokens: 8
+  temperature: 0.7
+
+training:
+  num_episodes: 1
+  ppo_split_start: 4000
+  max_grad_norm: 1.0
+  eval_every: 1
+  log_every: 1
+
+paths:
+  output_dir: results/ppo_shared_checkpoints  
+  log_file: results/ppo_shared_log.jsonl

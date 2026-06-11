@@ -30,7 +30,7 @@ run_plan_b() {
         --config "$config" \
         --spider_dir data/spider \
         --prm_ckpt results/prm_checkpoints/best_checkpoint \
-        --limit 10 \
+        --limit 16 \
         2>&1 || {
         echo "❌ Failed or timed out after 5 minutes"
         return 1

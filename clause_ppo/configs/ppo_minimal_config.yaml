@@ -1,0 +1,31 @@
+# Minimal PPO configuration for testing with very limited resources
+model:
+  actor_name: /home/henrylin0822/models/qwen
+  prm_checkpoint: results/prm_checkpoints/best_checkpoint
+  lora_rank: 4                # Minimal LoRA rank
+  lora_alpha: 8               # Minimal alpha
+  lora_dropout: 0.05
+  target_modules: [q_proj]    # Only one target module
+  quantization: none
+
+ppo:
+  alpha: 0.5
+  kl_coef: 0.1
+  learning_rate: 1.0e-5
+  batch_size: 1
+  mini_batch_size: 1
+  gradient_accumulation_steps: 1
+  ppo_epochs: 1
+  max_new_tokens: 8           # Very small generation
+  temperature: 0.7
+
+training:
+  num_episodes: 1             # Just 1 episode for testing
+  ppo_split_start: 4000
+  max_grad_norm: 1.0
+  eval_every: 1
+  log_every: 1
+
+paths:
+  output_dir: results/ppo_minimal_checkpoints
+  log_file: results/ppo_minimal_log.jsonl

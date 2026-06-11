@@ -254,3 +254,52 @@ def reconstruct_sql(sql_dict: dict, tables: dict) -> str:
             result += f" {op.upper()} {reconstruct_sql(nested, tables)}"
 
     return result
+
+
+def extract_sql_from_text(text: str) -> str:
+    """
+    Extract SQL from model-generated text that may contain markdown or formatting.
+    
+    Args:
+        text: Raw text potentially containing SQL
+        
+    Returns:
+        Clean SQL string
+    """
+    # Remove common markdown patterns
+    text = text.strip()
+    
+    # Remove markdown code blocks
+    if text.startswith('```sql') and text.endswith('```'):
+        text = text[6:-3].strip()
+    elif text.startswith('```') and text.endswith('```'):
+        text = text[3:-3].strip()
+    
+    # Remove common prefixes/suffixes
+    prefixes_to_remove = [
+        'Answer:', 'SQL:', 'Query:', '[SQL]', '<sql>', 'The SQL query is:',
+        'Here is the SQL:', 'The complete query is:'
+    ]
+    
+    for prefix in prefixes_to_remove:
+        if text.startswith(prefix):
+            text = text[len(prefix):].strip()
+    
+    # Remove common suffixes
+    suffixes_to_remove = ['</sql>', '[/SQL]', '</answer>']
+    for suffix in suffixes_to_remove:
+        if text.endswith(suffix):
+            text = text[:-len(suffix)].strip()
+    
+    # Take only the first line if multiple lines (often the SQL is on the first line)
+    lines = text.split('\n')
+    if lines:
+        first_line = lines[0].strip()
+        # If first line looks like SQL, use it
+        if first_line and any(keyword in first_line.upper() for keyword in ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'WITH']):
+            text = first_line
+    
+    # Remove trailing periods or semicolons
+    text = text.rstrip('.;')
+    
+    return text.strip()

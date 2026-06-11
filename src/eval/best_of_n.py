@@ -96,7 +96,18 @@ def load_prm_model(prm_ckpt: str, model_config: dict):
     
     score_head_path = os.path.join(prm_ckpt, 'score_head.pt')
     if os.path.exists(score_head_path):
-        score_head.load_state_dict(torch.load(score_head_path, map_location='cpu'))
+        state_dict = torch.load(score_head_path, map_location='cpu', weights_only=True)
+        # Handle different state dict formats from training
+        if 'weight' in state_dict and 'bias' in state_dict:
+            # New format: direct Linear layer keys
+            remapped_state_dict = {
+                '0.weight': state_dict['weight'],
+                '0.bias': state_dict['bias']
+            }
+            score_head.load_state_dict(remapped_state_dict)
+        else:
+            # Old format: Sequential keys
+            score_head.load_state_dict(state_dict)
         print(f"Loaded score head from {score_head_path}")
     else:
         print(f"WARNING: No score head at {score_head_path}")
@@ -182,7 +193,7 @@ def build_initial_prompt(question: str, schema: str) -> str:
         # Only use hardcoded schema for department_management when unavailable
         schema = "Tables: head (head_id, name, born_state, age, department_id), department (department_id, name, creation, ranking, budget_in_billions, num_employees), management (department_id, head_id, temporary_acting). IMPORTANT: Use ONLY these exact table and column names."
     
-    return f"Question: {question}\nSchema: {schema}\n\nSQL: SELECT"
+    return f"Question: {question}\nSchema: {schema}\n\nGenerate ONLY the SQL query, no explanations or markdown.\n\nSQL: SELECT"
 
 
 def build_prm_prompt(question: str, schema: str, sql_prefix: str) -> str:
@@ -266,28 +277,28 @@ def build_repair_prompt(question: str, schema: str, original_sql: str, faulty_cl
             # We have identifiable good clauses - use surgical repair
             if worst_score < 0.4:  # Very bad clause needs complete rewrite
                 if "SELECT" in worst_clause:
-                    return f"Question: {question}\nSchema: {schema}\n\nKeep the table and filtering logic: '{from_part} {where_part}'\nBut fix the SELECT clause.\n\nSQL: SELECT"
+                    return f"Question: {question}\nSchema: {schema}\n\nKeep the table and filtering logic: '{from_part} {where_part}'\nBut fix the SELECT clause. Generate ONLY the SQL query, no explanations.\n\nSQL: SELECT"
                 elif "FROM" in worst_clause:
-                    return f"Question: {question}\nSchema: {schema}\n\nKeep the selection: '{select_part}'\nBut fix the table references.\n\nSQL: {select_part} FROM"
+                    return f"Question: {question}\nSchema: {schema}\n\nKeep the selection: '{select_part}'\nBut fix the table references. Generate ONLY the SQL query, no explanations.\n\nSQL: {select_part} FROM"
                 elif "WHERE" in worst_clause:
-                    return f"Question: {question}\nSchema: {schema}\n\nKeep the table selection: '{select_part} {from_part}'\nBut fix the filtering conditions.\n\nSQL: {select_part} {from_part} WHERE"
+                    return f"Question: {question}\nSchema: {schema}\n\nKeep the table selection: '{select_part} {from_part}'\nBut fix the filtering conditions. Generate ONLY the SQL query, no explanations.\n\nSQL: {select_part} {from_part} WHERE"
     
     # Fallback strategies based on SQL characteristics
     if "join" in original_sql.lower() or len([w for w in original_sql.split() if w.upper() in ['JOIN', 'INNER', 'LEFT', 'RIGHT']]) > 0:
         # Complex JOIN query - simplify
-        return f"Question: {question}\nSchema: {schema}\n\nThe query '{original_sql}' uses complex JOINs. Write a simpler query using just the main table.\n\nSQL: SELECT"
+        return f"Question: {question}\nSchema: {schema}\n\nThe query '{original_sql}' uses complex JOINs. Write a simpler query using just the main table. Generate ONLY the SQL query, no explanations.\n\nSQL: SELECT"
     elif len(original_sql.strip()) < 20:
         # Very incomplete query
-        return f"Question: {question}\nSchema: {schema}\n\nComplete this incomplete SQL: '{original_sql}'\n\nSQL: SELECT"
+        return f"Question: {question}\nSchema: {schema}\n\nComplete this incomplete SQL: '{original_sql}' Generate ONLY the SQL query, no explanations.\n\nSQL: SELECT"
     elif not from_part:
         # Missing FROM clause
-        return f"Question: {question}\nSchema: {schema}\n\nThis query is missing table information. Complete it: '{original_sql}'\n\nSQL: SELECT"
+        return f"Question: {question}\nSchema: {schema}\n\nThis query is missing table information. Complete it: '{original_sql}' Generate ONLY the SQL query, no explanations.\n\nSQL: SELECT"
     elif "count" in original_sql.lower() and "*" not in original_sql and "(" not in original_sql:
         # Incomplete count function
-        return f"Question: {question}\nSchema: {schema}\n\nFix the count function in: '{original_sql}'\n\nSQL: SELECT"
+        return f"Question: {question}\nSchema: {schema}\n\nFix the count function in: '{original_sql}' Generate ONLY the SQL query, no explanations.\n\nSQL: SELECT"
     else:
         # General repair with more specific guidance
-        return f"Question: {question}\nSchema: {schema}\n\nRewrite this SQL query to be more accurate: '{original_sql}'\n\nSQL: SELECT"
+        return f"Question: {question}\nSchema: {schema}\n\nRewrite this SQL query to be more accurate: '{original_sql}' Generate ONLY the SQL query, no explanations.\n\nSQL: SELECT"
 
 
 def eval_best_of_n(config: dict, spider_dir: str, prm_ckpt: str, limit: int = None):
